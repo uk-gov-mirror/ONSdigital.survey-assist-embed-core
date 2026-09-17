@@ -238,7 +238,7 @@ class SaytWeightConfigSummary(BaseModel):
     retriever_name: str
     spec_type: str
     weights: int | float | dict[int, float]
-    normalised_weights: float | dict[int, float] | None
+    normalised_weights: int | float | dict[int, float] | None
 
 
 class SaytWeightSpecsSummary(BaseModel):
