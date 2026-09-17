@@ -620,17 +620,22 @@ def _build_weight_specs_summary(
     weight_specs: WeightSpecs,
     weights: WeightSpecs,
 ) -> SaytWeightSpecsSummary:
+    """Summarise the configured collection of weight specifications."""
+
+    def _get_normalised_weights(
+        retriever_name: str,
+    ) -> int | float | dict[int, float] | None:
+        """Return the normalised weights for the given retriever name, or None if not available."""
+        spec = weights.get_weight_spec(retriever_name)
+        return spec.weights if spec is not None else None
+
     return SaytWeightSpecsSummary(
         specs=[
             SaytWeightConfigSummary(
                 retriever_name=spec.retriever_name,
                 spec_type=type(spec).__name__,
                 weights=spec.weights,
-                normalised_weights=(
-                    weights.get_weight_spec(spec.retriever_name).weights
-                    if weights.get_weight_spec(spec.retriever_name) is not None
-                    else None,
-                ),
+                normalised_weights=_get_normalised_weights(spec.retriever_name),
             )
             for spec in weight_specs.specs
         ]

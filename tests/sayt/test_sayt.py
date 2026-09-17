@@ -359,6 +359,10 @@ def test_constructor_rejects_weights_without_active_retrievers(small_corpus):
             RuntimeWarning,
             match="Weight specs configured for unknown retrievers: ngram",
         ),
+        pytest.warns(
+            RuntimeWarning,
+            match="No weight spec configured for retrievers: prefix",
+        ),
         pytest.raises(
             ValueError,
             match="At least one active retriever weight must be configured",
