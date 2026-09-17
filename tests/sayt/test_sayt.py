@@ -315,6 +315,20 @@ def test_get_config_returns_rich_runtime_summary(small_corpus):
     assert config.retrievers[0].config == {}
     assert config.retrievers[1].config == {"n": 4, "max_df": 1.0}
     assert config.retrievers[1].retriever_type == "NgramRetriever"
+    assert [spec.model_dump() for spec in config.weight_specs.specs] == [
+        {
+            "retriever_name": "prefix",
+            "spec_type": "PrefixWeightSpec",
+            "weights": 2.0,
+            "normalised_weights": pytest.approx(2 / 3),
+        },
+        {
+            "retriever_name": "ngram",
+            "spec_type": "NgramWeightSpec",
+            "weights": 1.0,
+            "normalised_weights": pytest.approx(1 / 3),
+        },
+    ]
     assert config.artifact_provenance is None
 
 

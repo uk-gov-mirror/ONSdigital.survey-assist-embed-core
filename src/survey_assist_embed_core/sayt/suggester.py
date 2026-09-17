@@ -22,6 +22,8 @@ from survey_assist_embed_core.sayt.core import (
     SaytGlobalSettings,
     SaytRetrieverArtifactProvenance,
     SaytRetrieverSummary,
+    SaytWeightConfigSummary,
+    SaytWeightSpecsSummary,
     Suggestion,
     _normalise,
     take_with_ties,
@@ -435,6 +437,11 @@ class SAYTSuggester(BaseCorpusBound):  # pylint: disable=too-many-instance-attri
             )
         ]
 
+        weight_specs = _build_weight_specs_summary(
+            weight_specs=self._weight_specs,
+            weights=self._weights,
+        )
+
         return SaytConfiguration(
             settings=SaytGlobalSettings(
                 min_chars=self._min_chars,
@@ -448,6 +455,7 @@ class SAYTSuggester(BaseCorpusBound):  # pylint: disable=too-many-instance-attri
                 ),
             ),
             retrievers=retrievers,
+            weight_specs=weight_specs,
             artifact_provenance=(
                 self._artifact_provenance.model_copy(deep=True)
                 if self._artifact_provenance is not None
@@ -563,4 +571,22 @@ def _build_retriever_summary(
         retriever_type=type(configured_retriever.retriever).__name__,
         config=config,
         artifact_provenance=artifact_provenance,
+    )
+
+
+def _build_weight_specs_summary(
+    *,
+    weight_specs: WeightSpecs,
+    weights: WeightSpecs,
+) -> SaytWeightSpecsSummary:
+    return SaytWeightSpecsSummary(
+        specs=[
+            SaytWeightConfigSummary(
+                retriever_name=spec.retriever_name,
+                spec_type=type(spec).__name__,
+                weights=spec.weights,
+                normalised_weights=weights.get_weight_spec(spec.retriever_name).weights,
+            )
+            for spec in weight_specs.specs
+        ]
     )
