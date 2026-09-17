@@ -626,7 +626,11 @@ def _build_weight_specs_summary(
                 retriever_name=spec.retriever_name,
                 spec_type=type(spec).__name__,
                 weights=spec.weights,
-                normalised_weights=weights.get_weight_spec(spec.retriever_name).weights,
+                normalised_weights=(
+                    weights.get_weight_spec(spec.retriever_name).weights
+                    if weights.get_weight_spec(spec.retriever_name) is not None
+                    else None,
+                ),
             )
             for spec in weight_specs.specs
         ]
