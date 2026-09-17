@@ -4,7 +4,6 @@ This module provides the public suggester API that coordinates configured
 retrievers and combines their scores into ranked suggestions.
 """
 
-import math
 import os
 import time
 from collections.abc import Iterable, Mapping, Sequence
@@ -43,10 +42,9 @@ logger = get_logger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class _ConfiguredRetriever:
-    """Runtime retriever binding with its configured contribution weight."""
+    """Runtime retriever."""
 
     name: str
-    weight: float
     retriever: Retriever
 
 
@@ -226,13 +224,12 @@ class SAYTSuggester(BaseCorpusBound):  # pylint: disable=too-many-instance-attri
         return [
             _ConfiguredRetriever(
                 name=spec.name,
-                weight=weight,
                 retriever=spec.build(
                     self._corpus,
                     min_chars=self._min_chars,
                 ),
             )
-            for spec, weight in _normalised_retriever_specs(retriever_specs)
+            for spec in retriever_specs
         ]
 
     def _combine_suggestions(
@@ -475,26 +472,6 @@ class SAYTSuggester(BaseCorpusBound):  # pylint: disable=too-many-instance-attri
         self._weights = _normalised_weight_specs(self._weight_specs)
 
 
-def _normalised_retriever_specs(
-    retriever_specs: Sequence[RetrieverSpec],
-) -> list[tuple[RetrieverSpec, float]]:
-    """Validate and normalise configured retriever weights."""
-    if not retriever_specs:
-        raise ValueError("At least one retriever must be configured")
-
-    validated_specs: list[tuple[RetrieverSpec, float]] = []
-    for spec in retriever_specs:
-        weight = float(spec.weight)
-        if not math.isfinite(weight) or weight <= 0:
-            raise ValueError(
-                f"Retriever '{spec.name}' weight must be a finite value > 0"
-            )
-        validated_specs.append((spec, weight))
-
-    total_weight = sum(weight for _, weight in validated_specs)
-    return [(spec, weight / total_weight) for spec, weight in validated_specs]
-
-
 def _normalised_weight_specs(
     weight_specs: WeightSpecs,
     query_length: int | None = None,
@@ -520,13 +497,9 @@ def _load_retrievers_from_artifact(
     artifact_dir: Path,
 ) -> list[_ConfiguredRetriever]:
     """Restore runtime retrievers from a persisted SAYT artifact."""
-    normalised_specs = _normalised_retriever_specs(
-        [stored_retriever.spec for stored_retriever in stored_retrievers]
-    )
     return [
         _ConfiguredRetriever(
             name=stored_retriever.spec.name,
-            weight=weight,
             retriever=load_retriever_from_artifact(
                 corpus=corpus,
                 min_chars=min_chars,
@@ -534,11 +507,7 @@ def _load_retrievers_from_artifact(
                 artifact_dir=artifact_dir,
             ),
         )
-        for (_, weight), stored_retriever in zip(
-            normalised_specs,
-            stored_retrievers,
-            strict=True,
-        )
+        for stored_retriever in stored_retrievers
     ]
 
 
@@ -559,7 +528,7 @@ def _summarise_retriever_config(spec: RetrieverSpec) -> dict[str, Any]:
         items = (
             (field.name, getattr(spec, field.name))
             for field in fields(spec)
-            if field.name not in {"name", "weight"}
+            if field.name not in {"name"}
         )
         return {key: _jsonable_value(value) for key, value in items}
 
@@ -568,7 +537,7 @@ def _summarise_retriever_config(spec: RetrieverSpec) -> dict[str, Any]:
         return {
             str(key): _jsonable_value(value)
             for key, value in raw_config.items()
-            if key not in {"name", "weight"}
+            if key not in {"name"}
         }
     return {}
 
@@ -592,8 +561,6 @@ def _build_retriever_summary(
         name=spec.name,
         spec_type=type(spec).__name__,
         retriever_type=type(configured_retriever.retriever).__name__,
-        configured_weight=float(spec.weight),
-        normalised_weight=configured_retriever.weight,
         config=config,
         artifact_provenance=artifact_provenance,
     )

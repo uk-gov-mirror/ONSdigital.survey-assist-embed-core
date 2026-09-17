@@ -34,6 +34,7 @@ class RetrieverWeightSpec(Protocol):
 
 
 def _validate_retriever_weight(weight: float) -> None:
+    """Validate a single weight for a retriever."""
     if not math.isfinite(weight) or weight < 0:
         raise ValueError("retriever weight must be a finite value >= 0")
 

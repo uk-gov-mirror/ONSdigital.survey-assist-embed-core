@@ -95,30 +95,10 @@ def test_default_retriever_specs_returns_standard_set():
 @pytest.mark.parametrize(
     "factory, kwargs, match",
     [
-        (
-            PrefixRetrieverSpec,
-            {"weight": 0.0},
-            "retriever weight must be a finite value > 0",
-        ),
-        (
-            PrefixRetrieverSpec,
-            {"weight": float("nan")},
-            "retriever weight must be a finite value > 0",
-        ),
-        (
-            NgramRetrieverSpec,
-            {"weight": 0.0},
-            "retriever weight must be a finite value > 0",
-        ),
         (NgramRetrieverSpec, {"n": 1}, "ngram n must be between 2 and 5"),
         (NgramRetrieverSpec, {"n": 6}, "ngram n must be between 2 and 5"),
         (NgramRetrieverSpec, {"max_df": 0.0}, "ngram max_df must be in"),
         (NgramRetrieverSpec, {"max_df": 1.1}, "ngram max_df must be in"),
-        (
-            SemanticRetrieverSpec,
-            {"weight": float("inf")},
-            "retriever weight must be a finite value > 0",
-        ),
         (SemanticRetrieverSpec, {"model": "   "}, "semantic model must be"),
     ],
 )
@@ -140,9 +120,8 @@ def test_retriever_specs_keep_their_config():
     """Expose per-retriever settings on the spec object."""
     n = 4
     max_df = 0.8
-    spec = NgramRetrieverSpec(weight=2.0, n=n, max_df=max_df)
+    spec = NgramRetrieverSpec(n=n, max_df=max_df)
 
-    assert spec.weight == pytest.approx(2.0)
     assert spec.n == n
     assert spec.max_df == pytest.approx(max_df)
 
@@ -233,7 +212,7 @@ def test_semantic_retriever_spec_builds_semantic_retriever(monkeypatch):
         _StubSemanticRetriever,
     )
 
-    spec = SemanticRetrieverSpec(model="custom-model", weight=2.0)
+    spec = SemanticRetrieverSpec(model="custom-model")
 
     retriever = spec.build(corpus, min_chars=4)
 
@@ -265,7 +244,6 @@ def test_semantic_retriever_spec_passes_vectoriser_class_to_retriever(monkeypatc
 
     spec = SemanticRetrieverSpec(
         model="custom-model",
-        weight=2.0,
         vectoriser_class="OnnxVectoriser",
     )
 

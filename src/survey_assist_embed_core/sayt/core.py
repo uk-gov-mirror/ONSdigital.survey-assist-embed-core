@@ -226,8 +226,6 @@ class SaytRetrieverSummary(BaseModel):
     name: str
     spec_type: str
     retriever_type: str
-    configured_weight: float
-    normalised_weight: float
     config: dict[str, Any] = Field(default_factory=dict)
     artifact_provenance: SaytRetrieverArtifactProvenance | None = None
 

@@ -136,7 +136,6 @@ def test_storage_helper_validation_errors():
 
     class _UnknownSpec:
         name = "unknown"
-        weight = 1.0
 
         def build(self, corpus, *, min_chars):
             _ = (corpus, min_chars)
@@ -152,11 +151,6 @@ def test_storage_helper_validation_errors():
     ):
         storage._coerce_int(True, field_name="n")
 
-    with pytest.raises(
-        ValueError, match="Malformed float value for retriever field: weight"
-    ):
-        storage._coerce_float(True, field_name="weight")
-
 
 def test_serialise_stored_retriever_uses_object_dict_for_non_dataclass_specs():
     """Serialise runtime-only spec config from a plain object's __dict__."""
@@ -164,7 +158,6 @@ def test_serialise_stored_retriever_uses_object_dict_for_non_dataclass_specs():
     class _CustomSpec:
         def __init__(self):
             self.name = "custom"
-            self.weight = 1.5
             self.trigger = "groom"
             self.limit = 3
 
@@ -181,7 +174,6 @@ def test_serialise_stored_retriever_uses_object_dict_for_non_dataclass_specs():
 
     assert storage._serialise_stored_retriever(stored_retriever) == {
         "type": "custom",
-        "weight": 1.5,
         "path": "retrievers/99-custom",
         "config": {
             "trigger": "groom",
@@ -269,7 +261,6 @@ def test_semantic_retriever_artifact_round_trips_and_loads(
     corpus = CleanCorpus.model_validate(small_corpus)
     spec = SemanticRetrieverSpec(
         model="all-MiniLM-L6-v2",
-        weight=2.5,
         vectoriser_class="OnnxVectoriser",
     )
     stored_retriever = storage._build_stored_retriever(2, spec)
@@ -316,7 +307,6 @@ def test_semantic_retriever_artifact_round_trips_and_loads(
     rebuilt = storage._deserialise_stored_retriever(
         {
             "type": stored_retriever.spec.name,
-            "weight": spec.weight,
             "path": stored_retriever.path,
             "config": {
                 "model": "all-MiniLM-L6-v2",
@@ -328,7 +318,6 @@ def test_semantic_retriever_artifact_round_trips_and_loads(
     assert stored_retriever.spec.name == "semantic"
     assert stored_retriever.path == "retrievers/02-semantic"
     assert isinstance(rebuilt.spec, SemanticRetrieverSpec)
-    assert rebuilt.spec.weight == pytest.approx(2.5)
     assert rebuilt.spec.vectoriser_class == "OnnxVectoriser"
 
     storage.build_retriever_artifact(

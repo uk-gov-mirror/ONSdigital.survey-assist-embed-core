@@ -28,9 +28,8 @@ from survey_assist_embed_core.sayt.weight_specs import (
 
 
 class _CustomRetrieverSpec:
-    def __init__(self, *, trigger: str, weight: float = 1.0):
+    def __init__(self, *, trigger: str):
         self.trigger = trigger
-        self.weight = weight
         self.name = "custom-trigger"
 
     def build(self, corpus, *, min_chars):
@@ -40,7 +39,6 @@ class _CustomRetrieverSpec:
 @dataclass(frozen=True)
 class _FailingArtifactRetrieverSpec:
     name: str = "failing"
-    weight: float = 1.0
 
     def build(
         self,
@@ -141,7 +139,7 @@ def test_builder_writes_manifest_and_corpus(tmp_path, small_corpus):
         "corpus_file": "corpus.csv",
         "corpus_size": len(small_corpus),
         "retrievers": [
-            {"type": "prefix", "weight": 1.0, "path": None, "config": {}},
+            {"type": "prefix", "path": None, "config": {}},
         ],
         "weight_specs": [{"retriever_name": "prefix", "weights": 1.0}],
     }
@@ -321,7 +319,7 @@ def test_builder_rejects_custom_runtime_only_retriever_specs(tmp_path, small_cor
     """Persisted artifacts currently support only the built-in retriever specs."""
     builder = SAYTBuilder(
         small_corpus,
-        retrievers=[_CustomRetrieverSpec(trigger="groom", weight=1.5)],
+        retrievers=[_CustomRetrieverSpec(trigger="groom")],
         min_chars=3,
         max_suggestions=4,
     )

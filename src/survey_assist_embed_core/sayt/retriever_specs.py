@@ -2,7 +2,6 @@
 
 """Public retriever protocols and configuration objects for SAYT."""
 
-import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -48,10 +47,6 @@ class RetrieverSpec(Protocol):
     def name(self) -> str:
         """Return the stable identifier for this retriever configuration."""
 
-    @property
-    def weight(self) -> float:
-        """Return the finite positive weight applied during score combination."""
-
     def build(
         self,
         corpus: CleanCorpus,
@@ -89,11 +84,6 @@ class ArtifactRetrieverSpec(RetrieverSpec, Protocol):
         """Restore a runtime retriever from persisted artifact state."""
 
 
-def _validate_retriever_weight(weight: float) -> None:
-    if not math.isfinite(weight) or weight <= 0:
-        raise ValueError("retriever weight must be a finite value > 0")
-
-
 def _require_filespace_path(
     filespace_path: str | Path | None,
     *,
@@ -108,12 +98,7 @@ def _require_filespace_path(
 class PrefixRetrieverSpec:
     """Configuration for building a prefix retriever."""
 
-    weight: float = 1.0
     name: str = field(init=False, default="prefix")
-
-    def __post_init__(self) -> None:
-        """Validate configuration values after dataclass initialisation."""
-        _validate_retriever_weight(self.weight)
 
     def build(
         self,
@@ -154,14 +139,12 @@ class PrefixRetrieverSpec:
 class NgramRetrieverSpec:
     """Configuration for building a character n-gram retriever."""
 
-    weight: float = 1.0
     n: int = 3
     max_df: float = 0.2
     name: str = field(init=False, default="ngram")
 
     def __post_init__(self) -> None:
         """Validate n-gram configuration values after initialisation."""
-        _validate_retriever_weight(self.weight)
         if not _MIN_NGRAM_SIZE <= self.n <= _MAX_NGRAM_SIZE:
             raise ValueError("ngram n must be between 2 and 5")
         if not 0.0 < self.max_df <= 1.0:
@@ -240,14 +223,12 @@ class NgramRetrieverSpec:
 class SemanticRetrieverSpec:
     """Configuration for building a semantic retriever."""
 
-    weight: float = 1.0
     model: str = "all-MiniLM-L6-v2"
     vectoriser_class: str | None = None
     name: str = field(init=False, default="semantic")
 
     def __post_init__(self) -> None:
         """Validate semantic retriever configuration after initialisation."""
-        _validate_retriever_weight(self.weight)
         if not isinstance(self.model, str) or not self.model.strip():
             raise ValueError("semantic model must be a non-empty string")
 

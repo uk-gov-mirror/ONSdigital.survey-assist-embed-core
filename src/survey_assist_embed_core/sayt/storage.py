@@ -309,7 +309,7 @@ def _serialise_stored_retriever(
         config: dict[str, object] = {
             field.name: getattr(spec, field.name)
             for field in fields(spec)
-            if field.name not in {"name", "weight"}
+            if field.name not in {"name"}
         }
     else:
         raw_config = getattr(spec, "__dict__", None)
@@ -317,7 +317,7 @@ def _serialise_stored_retriever(
             {
                 str(key): value
                 for key, value in raw_config.items()
-                if key not in {"name", "weight"}
+                if key not in {"name"}
             }
             if isinstance(raw_config, dict)
             else {}
@@ -325,7 +325,6 @@ def _serialise_stored_retriever(
 
     return {
         "type": spec.name,
-        "weight": spec.weight,
         "path": stored_retriever.path,
         "config": config,
     }
@@ -333,24 +332,21 @@ def _serialise_stored_retriever(
 
 def _deserialise_stored_retriever(payload: dict[str, object]) -> StoredRetrieverSpec:
     retriever_type = str(payload["type"])
-    weight = _coerce_float(payload["weight"], field_name="weight")
     path = payload.get("path")
     config = payload.get("config", {})
     if not isinstance(config, dict):
         raise ValueError(f"Malformed retriever config for type: {retriever_type}")
     spec: RetrieverSpec
     if retriever_type == "prefix":
-        spec = PrefixRetrieverSpec(weight=weight)
+        spec = PrefixRetrieverSpec()
     elif retriever_type == "ngram":
         spec = NgramRetrieverSpec(
-            weight=weight,
             n=_coerce_int(config["n"], field_name="n"),
             max_df=_coerce_float(config["max_df"], field_name="max_df"),
         )
     elif retriever_type == "semantic":
         vectoriser_class = config.get("vectoriser_class")
         spec = SemanticRetrieverSpec(
-            weight=weight,
             model=str(config["model"]),
             vectoriser_class=(
                 None if vectoriser_class is None else str(vectoriser_class)
