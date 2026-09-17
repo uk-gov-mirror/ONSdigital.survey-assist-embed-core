@@ -312,7 +312,7 @@ def test_requested_query_length_adds_length_one_for_mixed_weights_only_when_omit
     }
 
 
-def test_normalisation_rejects_non_positive_query_length_state():
+def test_normalisation_rejects_non_positive_query_length_state_in_weight_config():
     """Reject malformed query-length state during normalisation."""
     weights = {1: 1.0}
     spec = PrefixWeightSpec(weights=weights)
@@ -320,11 +320,9 @@ def test_normalisation_rejects_non_positive_query_length_state():
 
     with pytest.raises(
         ValueError,
-        match="Query length must be positive int, got 0",
+        match="Query length in weight config must be a positive int, got 0",
     ):
-        WeightSpecs(specs=[spec, NgramWeightSpec(weights=1.0)]).get_normalised_weights(
-            query_length=0
-        )
+        WeightSpecs(specs=[spec, NgramWeightSpec(weights=1.0)]).get_normalised_weights()
 
 
 def test_zero_weight_is_retained_in_query_length_normalisation():

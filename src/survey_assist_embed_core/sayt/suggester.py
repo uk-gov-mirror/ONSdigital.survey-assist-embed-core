@@ -135,7 +135,10 @@ class SAYTSuggester(BaseCorpusBound):  # pylint: disable=too-many-instance-attri
         self._retrievers = self._build_retrievers(self._retriever_specs)
         self._stored_retrievers: tuple[StoredRetrieverSpec, ...] | None = None
         self._artifact_provenance: SaytArtifactProvenance | None = None
-        self._weights = _normalised_weight_specs(self._weight_specs)
+        self._weights = _normalised_weight_specs(
+            self._weight_specs,
+            retriever_names=[spec.name for spec in self._retriever_specs],
+        )
 
         logger.info(
             "SAYT suggester initialised",
@@ -197,7 +200,13 @@ class SAYTSuggester(BaseCorpusBound):  # pylint: disable=too-many-instance-attri
             artifact_dir=artifact_path,
         )
 
-        weights = _normalised_weight_specs(manifest.weight_specs)
+        retriever_specs = [
+            stored_retriever.spec for stored_retriever in manifest.retrievers
+        ]
+        weights = _normalised_weight_specs(
+            manifest.weight_specs,
+            retriever_names=[spec.name for spec in retriever_specs],
+        )
 
         artifact_provenance = SaytArtifactProvenance(
             artifact_dir=str(artifact_path),
@@ -210,9 +219,7 @@ class SAYTSuggester(BaseCorpusBound):  # pylint: disable=too-many-instance-attri
             corpus=corpus,
             min_chars=manifest.min_chars,
             max_suggestions=manifest.max_suggestions,
-            retriever_specs=[
-                stored_retriever.spec for stored_retriever in manifest.retrievers
-            ],
+            retriever_specs=retriever_specs,
             retrievers=retrievers,
             stored_retrievers=manifest.retrievers,
             weight_specs=manifest.weight_specs,
@@ -285,7 +292,11 @@ class SAYTSuggester(BaseCorpusBound):  # pylint: disable=too-many-instance-attri
     ) -> list[tuple[float, list[Suggestion]]]:
         result = []
         if weights is not None:
-            weight_specs = _normalised_weight_specs(weights, query_length=len(q_norm))
+            weight_specs = _normalised_weight_specs(
+                weights,
+                retriever_names=[spec.name for spec in self._retriever_specs],
+                query_length=len(q_norm),
+            )
         else:
             weight_specs = self._weights
 
@@ -473,28 +484,58 @@ class SAYTSuggester(BaseCorpusBound):  # pylint: disable=too-many-instance-attri
             weights: The new retriever weights to apply to this suggester.
 
         Raises:
-            ValueError: If the provided weights are invalid or empty.
+            ValueError: If no weight matches an active retriever or the active
+                weights have no positive total.
         """
         weights.warn_for_retriever_names([spec.name for spec in self._retriever_specs])
         self._weight_specs = weights
-        self._weights = _normalised_weight_specs(self._weight_specs)
+        self._weights = _normalised_weight_specs(
+            self._weight_specs,
+            retriever_names=[spec.name for spec in self._retriever_specs],
+        )
 
 
 def _normalised_weight_specs(
     weight_specs: WeightSpecs,
+    retriever_names: list[str],
     query_length: int | None = None,
 ) -> WeightSpecs:
-    if not weight_specs.specs:
-        raise ValueError("At least one retriever weight must be configured")
+    """Normalise active weights and zero weights for inactive retrievers.
 
-    weights_dict = weight_specs.get_normalised_weights(query_length=query_length)
-    updated_specs = []
-    for spec in weight_specs.specs:
-        if spec.retriever_name in weights_dict:
-            spec_type = type(spec)
-            updated_specs.append(spec_type(weights=weights_dict[spec.retriever_name]))
+    Unknown weight specs are retained in the returned collection with a
+    weight of 0.0, but do not contribute to the normalisation denominator.
 
-    return WeightSpecs(specs=updated_specs)
+    Args:
+        weight_specs: Configured retriever weight specifications.
+        retriever_names: Names of retrievers active in the suggester.
+        query_length: Optional normalised query length for variable weights.
+
+    Returns:
+        Weight specifications with active weights normalised and inactive
+        weights set to 0.0.
+
+    Raises:
+        ValueError: If no configured weight spec matches an active retriever
+            or the active weights have no positive total.
+    """
+    active_specs = tuple(
+        spec for spec in weight_specs.specs if spec.retriever_name in retriever_names
+    )
+
+    if not active_specs:
+        raise ValueError("At least one active retriever weight must be configured")
+
+    active_weight_specs = WeightSpecs(specs=active_specs)
+    weights_dict = active_weight_specs.get_normalised_weights(
+        query_length=query_length,
+    )
+
+    return WeightSpecs(
+        specs=[
+            type(spec)(weights=weights_dict.get(spec.retriever_name, 0.0))
+            for spec in weight_specs.specs
+        ]
+    )
 
 
 def _load_retrievers_from_artifact(

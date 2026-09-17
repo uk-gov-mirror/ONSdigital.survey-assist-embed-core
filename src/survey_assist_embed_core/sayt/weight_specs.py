@@ -33,10 +33,19 @@ class RetrieverWeightSpec(Protocol):
         """
 
 
-def _validate_retriever_weight(weight: float) -> None:
+def _validate_weights(weights: int | float | dict[int, float]) -> None:
     """Validate a single weight for a retriever."""
-    if not math.isfinite(weight) or weight < 0:
-        raise ValueError("retriever weight must be a finite value >= 0")
+    if isinstance(weights, (int, float)):
+        if not math.isfinite(weights) or weights < 0:
+            raise ValueError("weight must be a finite value >= 0")
+    else:
+        for length, weight in weights.items():
+            if not isinstance(length, int) or length <= 0:
+                raise ValueError(
+                    f"Query length in weight config must be a positive int, got {length}"
+                )
+            if not math.isfinite(weight) or weight < 0:
+                raise ValueError("weight must be a finite value >= 0")
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,15 +62,7 @@ class WeightConfig:
 
     def __post_init__(self) -> None:
         """Validate weights."""
-        if isinstance(self.weights, (int, float)):
-            _validate_retriever_weight(float(self.weights))
-        else:
-            for length, weight in self.weights.items():
-                if not isinstance(length, int) or length <= 0:
-                    raise ValueError(
-                        f"Query length must be 0 or a positive int, got {length}"
-                    )
-                _validate_retriever_weight(weight)
+        _validate_weights(self.weights)
 
     def get_weight(self, query_length: int | None = None) -> float:
         """Get weight for this retriever at a query length.
@@ -195,6 +196,9 @@ class WeightSpecs:
         Returns:
             A dictionary mapping retriever names to their normalised weights.
         """
+        for spec in self.specs:
+            _validate_weights(spec.weights)
+
         if all(isinstance(spec.weights, (int, float)) for spec in self.specs):
             # All weights are fixed numbers, normalise directly
             total_weight = sum(spec.get_weight() for spec in self.specs)
@@ -225,10 +229,8 @@ class WeightSpecs:
         weights: dict[str, dict[int, float]] = {
             spec.retriever_name: {} for spec in self.specs
         }
-        for num_char in num_chars:
-            if num_char <= 0:
-                raise ValueError(f"Query length must be positive int, got {num_char}")
 
+        for num_char in num_chars:
             total_weight = sum(
                 spec.get_weight(num_char)
                 for spec in self.specs

@@ -126,21 +126,17 @@ def test_retriever_specs_keep_their_config():
     assert spec.max_df == pytest.approx(max_df)
 
 
-def test_suggester_warns_when_weight_names_do_not_match_retrievers(small_corpus):
+def test_suggester_warns_when_weight_names_do_not_match_a_retriever(small_corpus):
     """Warn during construction when retriever and weight names differ."""
     with pytest.warns(RuntimeWarning) as warning_records:
         SAYTSuggester(
             small_corpus,
             min_chars=3,
             retrievers=[PrefixRetrieverSpec()],
-            weights=WeightSpecs(specs=[NgramWeightSpec()]),
+            weights=WeightSpecs(specs=[PrefixWeightSpec(), NgramWeightSpec()]),
         )
 
     warning_messages = [str(record.message) for record in warning_records]
-    assert any(
-        "No weight spec configured for retrievers: prefix" in message
-        for message in warning_messages
-    )
     assert any(
         "Weight specs configured for unknown retrievers: ngram" in message
         for message in warning_messages

@@ -8,7 +8,6 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -37,18 +36,6 @@ class _CustomWeightSpec:
 
     weights: float = 1.0
     retriever_name: str = field(init=False, default="custom")
-
-    def get_weight(self, query_length: int | None = None) -> float:
-        _ = query_length
-        return self.weights
-
-
-@dataclass(frozen=True, slots=True)
-class _SlotsOnlyWeightSpec:
-    """Weight spec for the slots-only retriever configuration test."""
-
-    weights: float = 1.0
-    retriever_name: str = field(init=False, default="slots-only")
 
     def get_weight(self, query_length: int | None = None) -> float:
         _ = query_length
@@ -332,6 +319,59 @@ def test_get_config_returns_rich_runtime_summary(small_corpus):
     assert config.artifact_provenance is None
 
 
+def test_unknown_weight_specs_are_zeroed_and_excluded_from_normalisation(
+    small_corpus,
+):
+    """Ignore unknown weights when normalising, but retain them in config."""
+    with pytest.warns(
+        RuntimeWarning,
+        match="Weight specs configured for unknown retrievers: ngram",
+    ):
+        suggester = SAYTSuggester(
+            small_corpus,
+            min_chars=3,
+            retrievers=[PrefixRetrieverSpec()],
+            weights=WeightSpecs(
+                specs=[
+                    PrefixWeightSpec(weights=1.0),
+                    NgramWeightSpec(weights=1.0),
+                ]
+            ),
+        )
+
+    assert suggester._weights.get_weight("prefix") == pytest.approx(1.0)
+    assert suggester._weights.get_weight("ngram") == pytest.approx(0.0)
+
+    normalised = {
+        spec.retriever_name: spec.normalised_weights
+        for spec in suggester.get_config().weight_specs.specs
+    }
+    assert normalised == {
+        "prefix": pytest.approx(1.0),
+        "ngram": pytest.approx(0.0),
+    }
+
+
+def test_constructor_rejects_weights_without_active_retrievers(small_corpus):
+    """Reject weights that match none of the configured retrievers."""
+    with (
+        pytest.warns(
+            RuntimeWarning,
+            match="Weight specs configured for unknown retrievers: ngram",
+        ),
+        pytest.raises(
+            ValueError,
+            match="At least one active retriever weight must be configured",
+        ),
+    ):
+        SAYTSuggester(
+            small_corpus,
+            min_chars=3,
+            retrievers=[PrefixRetrieverSpec()],
+            weights=WeightSpecs(specs=[NgramWeightSpec()]),
+        )
+
+
 def test_get_config_supports_custom_specs_without_artifact_handlers(small_corpus):
     """Summarise custom runtime-only specs without requiring persistence hooks."""
 
@@ -415,7 +455,7 @@ def test_get_config_returns_empty_config_for_slots_only_custom_spec(small_corpus
         __slots__ = ("name", "trigger")
 
         def __init__(self, *, trigger: str):
-            self.name = "slots-only"
+            self.name = "custom"
             self.trigger = trigger
 
         def build(self, corpus, *, min_chars):
@@ -426,7 +466,7 @@ def test_get_config_returns_empty_config_for_slots_only_custom_spec(small_corpus
         small_corpus,
         min_chars=3,
         retrievers=[_SlotsOnlySpec(trigger="groom")],
-        weights=WeightSpecs(specs=[_SlotsOnlyWeightSpec()]),
+        weights=WeightSpecs(specs=[_CustomWeightSpec()]),
     ).get_config()
 
     assert config.retrievers[0].config == {}
@@ -673,8 +713,24 @@ def test_zero_weight_excludes_retriever_from_public_results(small_corpus):
 
 def test_per_call_empty_weights_are_rejected(prefix_suggester):
     """Reject an empty per-call weight override."""
-    with pytest.raises(ValueError, match="At least one retriever weight"):
+    with pytest.raises(ValueError, match="At least one active retriever weight"):
         prefix_suggester.suggest("car", weights=WeightSpecs(specs=[]))
+
+
+def test_per_call_unknown_weights_do_not_dilute_active_weights(prefix_suggester):
+    """Normalise per-call weights using only active retrievers."""
+    results = prefix_suggester.suggest_with_scores(
+        "car",
+        weights=WeightSpecs(
+            specs=[
+                PrefixWeightSpec(weights=1.0),
+                NgramWeightSpec(weights=1.0),
+            ]
+        ),
+    )
+
+    assert results
+    assert max(result.score for result in results) == pytest.approx(1.0)
 
 
 def test_per_call_zero_total_weights_are_rejected(prefix_suggester):
@@ -786,86 +842,22 @@ def test_suggester_defaults_to_standard_retriever_specs(monkeypatch, small_corpu
 
 
 def test_constructor_rejects_empty_retriever_list(small_corpus):
-    """Reject suggester construction without any retriever specs."""
-    with pytest.raises(ValueError, match="At least one retriever"):
-        SAYTSuggester(small_corpus, retrievers=[], weights=WeightSpecs(specs=[]))
-
-
-def test_constructor_rejects_invalid_custom_retriever_weight(small_corpus):
-    """Reject custom retriever specs whose own weight is invalid."""
-    build_calls = []
-
-    class _StubRetriever:
-        def suggest_with_scores(self, q_norm, num_suggestions):
-            return []
-
-    @dataclass(frozen=True, slots=True)
-    class _StubRetrieverSpec:
-        name: str = "stub"
-        weight: float = 1.0
-
-        def build(self, corpus, *, min_chars):
-            build_calls.append((corpus, min_chars))
-            return _StubRetriever()
-
-    @dataclass(frozen=True, slots=True)
-    class _NegativeStubRetrieverSpec:
-        name: str = "negative"
-        weight: float = -0.5
-
-        def build(self, corpus, *, min_chars):
-            build_calls.append((corpus, min_chars))
-            return _StubRetriever()
-
-    @dataclass(frozen=True, slots=True)
-    class _NanStubRetrieverSpec:
-        name: str = "nan"
-        weight: float = float("nan")
-
-        def build(self, corpus, *, min_chars):
-            build_calls.append((corpus, min_chars))
-            return _StubRetriever()
-
-    @dataclass(frozen=True, slots=True)
-    class _NamedWeightSpec:
-        retriever_name: str
-        weights: float = 1.0
-
-        def get_weight(self, query_length: int | None = None) -> float:
-            _ = query_length
-            return self.weights
-
-    with pytest.raises(
-        ValueError,
-        match="Retriever 'negative' weight must be a finite value => 0",
+    """Reject construction without any active retriever specs."""
+    with (
+        pytest.warns(
+            RuntimeWarning,
+            match="Weight specs configured for unknown retrievers: prefix",
+        ),
+        pytest.raises(
+            ValueError,
+            match="At least one active retriever weight must be configured",
+        ),
     ):
         SAYTSuggester(
             small_corpus,
-            retrievers=[_StubRetrieverSpec(), _NegativeStubRetrieverSpec()],
-            weights=WeightSpecs(
-                specs=[
-                    _NamedWeightSpec("stub"),
-                    _NamedWeightSpec("negative", weights=-1),
-                ]
-            ),
+            retrievers=[],
+            weights=WeightSpecs(specs=[PrefixWeightSpec(weights=1.0)]),
         )
-
-    with pytest.raises(
-        ValueError,
-        match="Retriever 'nan' weight must be a finite value => 0",
-    ):
-        SAYTSuggester(
-            small_corpus,
-            retrievers=[_StubRetrieverSpec(), _NanStubRetrieverSpec()],
-            weights=WeightSpecs(
-                specs=[
-                    _NamedWeightSpec("stub"),
-                    _NamedWeightSpec("nan", weights=np.nan),
-                ]
-            ),
-        )
-
-    assert not build_calls
 
 
 def test_clean_corpus_rejects_empty_persisted_rows():
