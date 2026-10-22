@@ -5,9 +5,13 @@
 # %%
 from survey_assist_embed_core.sayt import (
     NgramRetrieverSpec,
+    NgramWeightSpec,
     PrefixRetrieverSpec,
+    PrefixWeightSpec,
     SAYTSuggester,
     SemanticRetrieverSpec,
+    SemanticWeightSpec,
+    WeightSpecs,
 )
 from survey_assist_embed_core.sayt.core import _normalise
 
@@ -27,6 +31,15 @@ small_corpus = [
     ("Car servicing", "Car servicing"),
 ]
 
+# Define weights
+weights: WeightSpecs = WeightSpecs(
+    specs=[
+        PrefixWeightSpec(),
+        NgramWeightSpec(weights=2),
+        SemanticWeightSpec(weights={4: 2, 6: 3.0}),
+    ]
+)
+
 # set max_df high to avoid filtering out n-grams in this tiny corpus
 suggester = SAYTSuggester(
     small_corpus,
@@ -35,6 +48,7 @@ suggester = SAYTSuggester(
         NgramRetrieverSpec(max_df=0.8),
         SemanticRetrieverSpec(),
     ],
+    weights=weights,
 )
 
 

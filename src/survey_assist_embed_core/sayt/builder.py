@@ -52,6 +52,7 @@ class SAYTBuilder(BaseCorpusBound):
                 min_chars=self._min_chars,
                 max_suggestions=self._max_suggestions,
                 retriever_specs=self._retriever_specs,
+                weight_specs=self._weight_specs,
             )
 
             write_artifact_corpus(self._corpus, artifact_dir=staged_dir)

@@ -13,6 +13,7 @@ from survey_assist_embed_core.sayt.retriever_specs import (
     default_retriever_specs,
 )
 from survey_assist_embed_core.sayt.storage import load_corpus_from_csv
+from survey_assist_embed_core.sayt.weight_specs import WeightSpecs, default_weight_specs
 
 
 class BaseCorpusBound:  # pylint: disable=too-few-public-methods
@@ -22,12 +23,14 @@ class BaseCorpusBound:  # pylint: disable=too-few-public-methods
     _min_chars: int
     _max_suggestions: int
     _retriever_specs: tuple[RetrieverSpec, ...]
+    _weights: WeightSpecs
 
     def __init__(
         self,
         corpus: Iterable[tuple[object, object]] | Iterable[str],
         *,
         retrievers: Sequence[RetrieverSpec] | None = None,
+        weights: WeightSpecs | None = None,
         min_chars: int = 4,
         max_suggestions: int = 10,
     ) -> None:
@@ -38,6 +41,7 @@ class BaseCorpusBound:  # pylint: disable=too-few-public-methods
         self._retriever_specs = tuple(
             default_retriever_specs() if retrievers is None else retrievers
         )
+        self._weight_specs = default_weight_specs() if weights is None else weights
 
     @classmethod
     def from_csv[  # pylint: disable=too-many-arguments  # noqa: PLR0913
@@ -51,6 +55,7 @@ class BaseCorpusBound:  # pylint: disable=too-few-public-methods
         retrievers: Sequence[RetrieverSpec] | None = None,
         min_chars: int = 4,
         max_suggestions: int = 10,
+        weights: WeightSpecs | None = None,
     ) -> CorpusBoundT:
         """Build a corpus-bound SAYT object from CSV input."""
         corpus_rows = load_corpus_from_csv(
@@ -61,6 +66,7 @@ class BaseCorpusBound:  # pylint: disable=too-few-public-methods
         return cls(
             corpus_rows,
             retrievers=retrievers,
+            weights=weights,
             min_chars=min_chars,
             max_suggestions=max_suggestions,
         )

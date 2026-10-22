@@ -14,6 +14,12 @@ from survey_assist_embed_core.sayt import (
     storage,
 )
 from survey_assist_embed_core.sayt.core import CleanCorpus
+from survey_assist_embed_core.sayt.weight_specs import (
+    NgramWeightSpec,
+    PrefixWeightSpec,
+    SemanticWeightSpec,
+    WeightSpecs,
+)
 
 
 def test_prepare_artifact_dir_handles_existing_paths(tmp_path):
@@ -92,6 +98,7 @@ def test_read_artifact_inputs_validate_missing_and_malformed_state(tmp_path):
                 "corpus_file": "corpus.csv",
                 "corpus_size": 1,
                 "retrievers": [],
+                "weights": [{"type": "prefix", "weights": 1}],
             }
         ),
         encoding="utf-8",
@@ -129,7 +136,6 @@ def test_storage_helper_validation_errors():
 
     class _UnknownSpec:
         name = "unknown"
-        weight = 1.0
 
         def build(self, corpus, *, min_chars):
             _ = (corpus, min_chars)
@@ -145,11 +151,6 @@ def test_storage_helper_validation_errors():
     ):
         storage._coerce_int(True, field_name="n")
 
-    with pytest.raises(
-        ValueError, match="Malformed float value for retriever field: weight"
-    ):
-        storage._coerce_float(True, field_name="weight")
-
 
 def test_serialise_stored_retriever_uses_object_dict_for_non_dataclass_specs():
     """Serialise runtime-only spec config from a plain object's __dict__."""
@@ -157,7 +158,6 @@ def test_serialise_stored_retriever_uses_object_dict_for_non_dataclass_specs():
     class _CustomSpec:
         def __init__(self):
             self.name = "custom"
-            self.weight = 1.5
             self.trigger = "groom"
             self.limit = 3
 
@@ -174,13 +174,83 @@ def test_serialise_stored_retriever_uses_object_dict_for_non_dataclass_specs():
 
     assert storage._serialise_stored_retriever(stored_retriever) == {
         "type": "custom",
-        "weight": 1.5,
         "path": "retrievers/99-custom",
         "config": {
             "trigger": "groom",
             "limit": 3,
         },
     }
+
+
+def test_weight_specs_round_trip_through_storage():
+    """Preserve weight names, values, and order through serialization."""
+    original = WeightSpecs(
+        specs=[
+            PrefixWeightSpec(weights=2.0),
+            NgramWeightSpec(weights={1: 0.5, 4: 1.5}),
+        ]
+    )
+
+    payload = storage._serialise_weight_specs(original)
+    restored = storage._deserialise_weight_specs(payload)
+
+    assert restored.specs == original.specs
+
+
+def test_empty_weight_specs_round_trip_through_storage():
+    """Preserve an empty weight-spec collection through serialization."""
+    original = WeightSpecs(specs=[])
+
+    payload = storage._serialise_weight_specs(original)
+    restored = storage._deserialise_weight_specs(payload)
+
+    assert not payload
+    assert not restored.specs
+
+
+def test_all_weight_spec_types_round_trip_through_storage():
+    """Restore each supported weight-spec subtype from serialized data."""
+    original = WeightSpecs(
+        specs=[
+            PrefixWeightSpec(weights=1.0),
+            NgramWeightSpec(weights=2.0),
+            SemanticWeightSpec(weights=3.0),
+        ]
+    )
+
+    restored = storage._deserialise_weight_specs(
+        storage._serialise_weight_specs(original)
+    )
+
+    assert [type(spec) for spec in restored.specs] == [
+        PrefixWeightSpec,
+        NgramWeightSpec,
+        SemanticWeightSpec,
+    ]
+    assert restored.specs == original.specs
+
+
+def test_deserialise_weight_spec_defaults_missing_weights():
+    """Use the default weight when the serialized field is absent."""
+    restored = storage._deserialise_weight_specs([{"retriever_name": "prefix"}])
+
+    assert restored.specs == [
+        PrefixWeightSpec(),
+    ]
+
+
+@pytest.mark.parametrize(
+    "payload, message",
+    [
+        ({}, "Weight specs payload must be a list"),
+        ([None], "Each weight spec item must be a dictionary"),
+        ([{"retriever_name": "unknown"}], "Unsupported weight spec type: unknown"),
+    ],
+)
+def test_deserialise_weight_specs_rejects_malformed_payload(payload, message):
+    """Reject malformed or unsupported serialized weight specifications."""
+    with pytest.raises(ValueError, match=message):
+        storage._deserialise_weight_specs(payload)
 
 
 def test_semantic_retriever_artifact_round_trips_and_loads(
@@ -191,7 +261,6 @@ def test_semantic_retriever_artifact_round_trips_and_loads(
     corpus = CleanCorpus.model_validate(small_corpus)
     spec = SemanticRetrieverSpec(
         model="all-MiniLM-L6-v2",
-        weight=2.5,
         vectoriser_class="OnnxVectoriser",
     )
     stored_retriever = storage._build_stored_retriever(2, spec)
@@ -206,6 +275,7 @@ def test_semantic_retriever_artifact_round_trips_and_loads(
             "vectoriser_class": vectoriser_class,
             "output_dir": output_dir,
             "overwrite": overwrite,
+            "query_prefix": "",
         }
 
     def _fake_load_semantic_index(corpus_arg, *, model, vectoriser_class, folder_path):
@@ -238,7 +308,6 @@ def test_semantic_retriever_artifact_round_trips_and_loads(
     rebuilt = storage._deserialise_stored_retriever(
         {
             "type": stored_retriever.spec.name,
-            "weight": spec.weight,
             "path": stored_retriever.path,
             "config": {
                 "model": "all-MiniLM-L6-v2",
@@ -250,7 +319,6 @@ def test_semantic_retriever_artifact_round_trips_and_loads(
     assert stored_retriever.spec.name == "semantic"
     assert stored_retriever.path == "retrievers/02-semantic"
     assert isinstance(rebuilt.spec, SemanticRetrieverSpec)
-    assert rebuilt.spec.weight == pytest.approx(2.5)
     assert rebuilt.spec.vectoriser_class == "OnnxVectoriser"
 
     storage.build_retriever_artifact(

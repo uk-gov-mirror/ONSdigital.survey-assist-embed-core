@@ -13,6 +13,11 @@ from survey_assist_embed_core.sayt import (
     default_retriever_specs,
 )
 from survey_assist_embed_core.sayt.core import CleanCorpus
+from survey_assist_embed_core.sayt.weight_specs import (
+    NgramWeightSpec,
+    PrefixWeightSpec,
+    WeightSpecs,
+)
 
 
 @pytest.mark.parametrize(
@@ -90,30 +95,10 @@ def test_default_retriever_specs_returns_standard_set():
 @pytest.mark.parametrize(
     "factory, kwargs, match",
     [
-        (
-            PrefixRetrieverSpec,
-            {"weight": 0.0},
-            "retriever weight must be a finite value > 0",
-        ),
-        (
-            PrefixRetrieverSpec,
-            {"weight": float("nan")},
-            "retriever weight must be a finite value > 0",
-        ),
-        (
-            NgramRetrieverSpec,
-            {"weight": 0.0},
-            "retriever weight must be a finite value > 0",
-        ),
         (NgramRetrieverSpec, {"n": 1}, "ngram n must be between 2 and 5"),
         (NgramRetrieverSpec, {"n": 6}, "ngram n must be between 2 and 5"),
         (NgramRetrieverSpec, {"max_df": 0.0}, "ngram max_df must be in"),
         (NgramRetrieverSpec, {"max_df": 1.1}, "ngram max_df must be in"),
-        (
-            SemanticRetrieverSpec,
-            {"weight": float("inf")},
-            "retriever weight must be a finite value > 0",
-        ),
         (SemanticRetrieverSpec, {"model": "   "}, "semantic model must be"),
     ],
 )
@@ -135,41 +120,75 @@ def test_retriever_specs_keep_their_config():
     """Expose per-retriever settings on the spec object."""
     n = 4
     max_df = 0.8
-    spec = NgramRetrieverSpec(weight=2.0, n=n, max_df=max_df)
+    spec = NgramRetrieverSpec(n=n, max_df=max_df)
 
-    assert spec.weight == pytest.approx(2.0)
     assert spec.n == n
     assert spec.max_df == pytest.approx(max_df)
 
 
-def test_semantic_retriever_spec_builds_semantic_retriever(monkeypatch):
-    """Delegate semantic retriever construction with the configured settings."""
-    corpus = CleanCorpus.model_validate([("car wash", "Car Wash")])
-    captured = {}
+def test_suggester_warns_when_weight_names_do_not_match_a_retriever(small_corpus):
+    """Warn during construction when retriever and weight names differ."""
+    with pytest.warns(RuntimeWarning) as warning_records:
+        SAYTSuggester(
+            small_corpus,
+            min_chars=3,
+            retrievers=[PrefixRetrieverSpec()],
+            weights=WeightSpecs(specs=[PrefixWeightSpec(), NgramWeightSpec()]),
+        )
 
-    class _StubSemanticRetriever:
-        def __init__(self, corpus_arg, *, model, vectoriser_class, min_chars):
-            captured["corpus"] = corpus_arg
-            captured["model"] = model
-            captured["vectoriser_class"] = vectoriser_class
-            captured["min_chars"] = min_chars
-
-    monkeypatch.setattr(
-        "survey_assist_embed_core.sayt.retriever_specs.SemanticRetriever",
-        _StubSemanticRetriever,
+    warning_messages = [str(record.message) for record in warning_records]
+    assert any(
+        "Weight specs configured for unknown retrievers: ngram" in message
+        for message in warning_messages
     )
 
-    spec = SemanticRetrieverSpec(model="custom-model", weight=2.0)
 
-    retriever = spec.build(corpus, min_chars=4)
+def test_update_weights_warns_when_weight_names_do_not_match(small_corpus):
+    """Warn when replacing weights with names unknown to the suggester."""
+    suggester = SAYTSuggester(
+        small_corpus,
+        min_chars=3,
+        retrievers=[PrefixRetrieverSpec()],
+        weights=WeightSpecs(specs=[PrefixWeightSpec()]),
+    )
 
-    assert isinstance(retriever, _StubSemanticRetriever)
-    assert captured == {
-        "corpus": corpus,
-        "model": "custom-model",
-        "vectoriser_class": None,
-        "min_chars": 4,
-    }
+    with pytest.warns(
+        RuntimeWarning,
+        match="Weight specs configured for unknown retrievers: ngram",
+    ):
+        suggester.update_weights(
+            WeightSpecs(specs=[PrefixWeightSpec(), NgramWeightSpec()])
+        )
+
+
+def test_suggester_warns_when_weight_names_are_duplicate(small_corpus):
+    """Capture duplicate weight-spec warnings during construction."""
+    with pytest.warns(
+        RuntimeWarning,
+        match="Duplicate retriever weight specs found for: prefix",
+    ):
+        SAYTSuggester(
+            small_corpus,
+            min_chars=3,
+            retrievers=[PrefixRetrieverSpec()],
+            weights=WeightSpecs(specs=[PrefixWeightSpec(), PrefixWeightSpec()]),
+        )
+
+
+def test_update_weights_warns_when_retriever_weight_is_missing(small_corpus):
+    """Capture missing weight-spec warnings during an update."""
+    suggester = SAYTSuggester(
+        small_corpus,
+        min_chars=3,
+        retrievers=[PrefixRetrieverSpec(), NgramRetrieverSpec(max_df=1.0)],
+        weights=WeightSpecs(specs=[PrefixWeightSpec(), NgramWeightSpec()]),
+    )
+
+    with pytest.warns(
+        RuntimeWarning,
+        match="No weight spec configured for retrievers: ngram",
+    ):
+        suggester.update_weights(WeightSpecs(specs=[PrefixWeightSpec()]))
 
 
 def test_semantic_retriever_spec_passes_vectoriser_class_to_retriever(monkeypatch):
@@ -191,7 +210,6 @@ def test_semantic_retriever_spec_passes_vectoriser_class_to_retriever(monkeypatc
 
     spec = SemanticRetrieverSpec(
         model="custom-model",
-        weight=2.0,
         vectoriser_class="OnnxVectoriser",
     )
 

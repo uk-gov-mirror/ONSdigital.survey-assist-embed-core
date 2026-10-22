@@ -24,6 +24,13 @@ from survey_assist_embed_core.sayt.retriever_specs import (
     RetrieverSpec,
     SemanticRetrieverSpec,
 )
+from survey_assist_embed_core.sayt.weight_specs import (
+    NgramWeightSpec,
+    PrefixWeightSpec,
+    SemanticWeightSpec,
+    WeightConfig,
+    WeightSpecs,
+)
 
 SAYT_ARTIFACT_TYPE = "sayt"
 SAYT_ARTIFACT_VERSION = 2
@@ -49,6 +56,7 @@ class SaytArtifactManifest:
     corpus_file: str
     corpus_size: int
     retrievers: tuple[StoredRetrieverSpec, ...]
+    weight_specs: WeightSpecs
 
 
 def load_corpus_from_csv(
@@ -144,6 +152,7 @@ def build_artifact_manifest(
     min_chars: int,
     max_suggestions: int,
     retriever_specs: tuple[RetrieverSpec, ...],
+    weight_specs: WeightSpecs,
 ) -> SaytArtifactManifest:
     """Build the structured manifest payload for a SAYT artifact."""
     return SaytArtifactManifest(
@@ -155,6 +164,7 @@ def build_artifact_manifest(
             _build_stored_retriever(index, spec)
             for index, spec in enumerate(retriever_specs)
         ),
+        weight_specs=weight_specs,
     )
 
 
@@ -193,6 +203,7 @@ def read_artifact_manifest(*, artifact_dir: str | Path) -> SaytArtifactManifest:
             retrievers=tuple(
                 _deserialise_stored_retriever(item) for item in payload["retrievers"]
             ),
+            weight_specs=_deserialise_weight_specs(payload["weight_specs"]),
         )
     except KeyError as exc:
         raise ValueError(f"Malformed artifact manifest: missing {exc.args[0]}") from exc
@@ -285,6 +296,7 @@ def _serialise_manifest(manifest: SaytArtifactManifest) -> dict[str, object]:
             _serialise_stored_retriever(stored_retriever)
             for stored_retriever in manifest.retrievers
         ],
+        "weight_specs": _serialise_weight_specs(manifest.weight_specs),
     }
 
 
@@ -297,7 +309,7 @@ def _serialise_stored_retriever(
         config: dict[str, object] = {
             field.name: getattr(spec, field.name)
             for field in fields(spec)
-            if field.name not in {"name", "weight"}
+            if field.name not in {"name"}
         }
     else:
         raw_config = getattr(spec, "__dict__", None)
@@ -305,7 +317,7 @@ def _serialise_stored_retriever(
             {
                 str(key): value
                 for key, value in raw_config.items()
-                if key not in {"name", "weight"}
+                if key not in {"name"}
             }
             if isinstance(raw_config, dict)
             else {}
@@ -313,7 +325,6 @@ def _serialise_stored_retriever(
 
     return {
         "type": spec.name,
-        "weight": spec.weight,
         "path": stored_retriever.path,
         "config": config,
     }
@@ -321,24 +332,21 @@ def _serialise_stored_retriever(
 
 def _deserialise_stored_retriever(payload: dict[str, object]) -> StoredRetrieverSpec:
     retriever_type = str(payload["type"])
-    weight = _coerce_float(payload["weight"], field_name="weight")
     path = payload.get("path")
     config = payload.get("config", {})
     if not isinstance(config, dict):
         raise ValueError(f"Malformed retriever config for type: {retriever_type}")
     spec: RetrieverSpec
     if retriever_type == "prefix":
-        spec = PrefixRetrieverSpec(weight=weight)
+        spec = PrefixRetrieverSpec()
     elif retriever_type == "ngram":
         spec = NgramRetrieverSpec(
-            weight=weight,
             n=_coerce_int(config["n"], field_name="n"),
             max_df=_coerce_float(config["max_df"], field_name="max_df"),
         )
     elif retriever_type == "semantic":
         vectoriser_class = config.get("vectoriser_class")
         spec = SemanticRetrieverSpec(
-            weight=weight,
             model=str(config["model"]),
             vectoriser_class=(
                 None if vectoriser_class is None else str(vectoriser_class)
@@ -352,6 +360,49 @@ def _deserialise_stored_retriever(payload: dict[str, object]) -> StoredRetriever
     return StoredRetrieverSpec(
         spec=spec, path=str(path) if isinstance(path, str) else None
     )
+
+
+def _serialise_weight_specs(weight_specs: WeightSpecs) -> list[dict[str, object]]:
+    """Serialize WeightSpecs to a list of dictionaries."""
+    serialized: list[dict[str, object]] = []
+    for spec in weight_specs.specs:
+        serialized.append(
+            {
+                "retriever_name": spec.retriever_name,
+                "weights": spec.weights,
+            }
+        )
+    return serialized
+
+
+def _deserialise_weight_specs(payload: list[object]) -> WeightSpecs:
+    """Deserialize a list of dictionaries back to WeightSpecs."""
+    if not isinstance(payload, list):
+        raise ValueError("Weight specs payload must be a list")
+
+    specs: list[WeightConfig] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            raise ValueError("Each weight spec item must be a dictionary")
+
+        spec_type = str(item.get("retriever_name", ""))
+        weights_value = item.get("weights", 1.0)
+
+        # Deserialize dict weights if present
+        if isinstance(weights_value, dict):
+            # Convert string keys to int keys
+            weights_value = {int(k): float(v) for k, v in weights_value.items()}
+
+        if spec_type == "prefix":
+            specs.append(PrefixWeightSpec(weights=weights_value))
+        elif spec_type == "ngram":
+            specs.append(NgramWeightSpec(weights=weights_value))
+        elif spec_type == "semantic":
+            specs.append(SemanticWeightSpec(weights=weights_value))
+        else:
+            raise ValueError(f"Unsupported weight spec type: {spec_type}")
+
+    return WeightSpecs(specs=specs)
 
 
 def _coerce_int(value: object, *, field_name: str) -> int:

@@ -20,12 +20,16 @@ from survey_assist_embed_core.sayt import (
 from survey_assist_embed_core.sayt.builder import _remove_path
 from survey_assist_embed_core.sayt.core import CleanCorpus
 from survey_assist_embed_core.sayt.suggester import SAYTSuggester
+from survey_assist_embed_core.sayt.weight_specs import (
+    NgramWeightSpec,
+    PrefixWeightSpec,
+    WeightSpecs,
+)
 
 
 class _CustomRetrieverSpec:
-    def __init__(self, *, trigger: str, weight: float = 1.0):
+    def __init__(self, *, trigger: str):
         self.trigger = trigger
-        self.weight = weight
         self.name = "custom-trigger"
 
     def build(self, corpus, *, min_chars):
@@ -35,7 +39,6 @@ class _CustomRetrieverSpec:
 @dataclass(frozen=True)
 class _FailingArtifactRetrieverSpec:
     name: str = "failing"
-    weight: float = 1.0
 
     def build(
         self,
@@ -120,6 +123,7 @@ def test_builder_writes_manifest_and_corpus(tmp_path, small_corpus):
         retrievers=[PrefixRetrieverSpec()],
         min_chars=3,
         max_suggestions=5,
+        weights=WeightSpecs(specs=[PrefixWeightSpec()]),
     ).build_artifact(artifact_dir)
 
     manifest = json.loads((artifact_dir / "manifest.json").read_text(encoding="utf-8"))
@@ -135,8 +139,9 @@ def test_builder_writes_manifest_and_corpus(tmp_path, small_corpus):
         "corpus_file": "corpus.csv",
         "corpus_size": len(small_corpus),
         "retrievers": [
-            {"type": "prefix", "weight": 1.0, "path": None, "config": {}},
+            {"type": "prefix", "path": None, "config": {}},
         ],
+        "weight_specs": [{"retriever_name": "prefix", "weights": 1.0}],
     }
     assert rows == [
         {
@@ -144,6 +149,25 @@ def test_builder_writes_manifest_and_corpus(tmp_path, small_corpus):
             "display_text": display_text,
         }
         for search_text, display_text in CleanCorpus.model_validate(small_corpus).rows
+    ]
+
+
+def test_builder_persists_query_length_weight_specs(tmp_path, small_corpus):
+    """Persist query-length-specific weights in the artifact manifest."""
+    artifact_dir = SAYTBuilder(
+        small_corpus,
+        retrievers=[PrefixRetrieverSpec()],
+        min_chars=3,
+        weights=WeightSpecs(specs=[PrefixWeightSpec(weights={3: 0.5, 6: 1.5})]),
+    ).build_artifact(tmp_path / "artifact")
+
+    manifest = json.loads((artifact_dir / "manifest.json").read_text(encoding="utf-8"))
+
+    assert manifest["weight_specs"] == [
+        {
+            "retriever_name": "prefix",
+            "weights": {"3": 0.5, "6": 1.5},
+        }
     ]
 
 
@@ -189,6 +213,7 @@ def test_builder_writes_ngram_filespace(monkeypatch, tmp_path, small_corpus):
         small_corpus,
         retrievers=[NgramRetrieverSpec(max_df=1.0)],
         min_chars=3,
+        weights=WeightSpecs(specs=[NgramWeightSpec(weights=2.0)]),
     ).build_artifact(artifact_dir)
 
     manifest = json.loads((artifact_dir / "manifest.json").read_text(encoding="utf-8"))
@@ -272,6 +297,7 @@ def test_from_artifact_loads_persisted_ngram_filespace(
         small_corpus,
         retrievers=[NgramRetrieverSpec(max_df=1.0)],
         min_chars=3,
+        weights=WeightSpecs(specs=[NgramWeightSpec(weights=2.0)]),
     )
     builder.build_artifact(artifact_dir)
 
@@ -279,6 +305,7 @@ def test_from_artifact_loads_persisted_ngram_filespace(
     manifest = json.loads((artifact_dir / "manifest.json").read_text(encoding="utf-8"))
 
     assert suggester.suggest("groom") == [target_display]
+    assert manifest["weight_specs"] == [{"retriever_name": "ngram", "weights": 2.0}]
     assert captured == {
         "folder_path": str(artifact_dir / manifest["retrievers"][0]["path"]),
         "vectoriser_type": "_CharNgramVectoriser",
@@ -292,7 +319,7 @@ def test_builder_rejects_custom_runtime_only_retriever_specs(tmp_path, small_cor
     """Persisted artifacts currently support only the built-in retriever specs."""
     builder = SAYTBuilder(
         small_corpus,
-        retrievers=[_CustomRetrieverSpec(trigger="groom", weight=1.5)],
+        retrievers=[_CustomRetrieverSpec(trigger="groom")],
         min_chars=3,
         max_suggestions=4,
     )

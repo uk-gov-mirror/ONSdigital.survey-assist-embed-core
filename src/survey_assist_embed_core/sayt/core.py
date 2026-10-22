@@ -226,10 +226,27 @@ class SaytRetrieverSummary(BaseModel):
     name: str
     spec_type: str
     retriever_type: str
-    configured_weight: float
-    normalised_weight: float
     config: dict[str, Any] = Field(default_factory=dict)
     artifact_provenance: SaytRetrieverArtifactProvenance | None = None
+
+
+class SaytWeightConfigSummary(BaseModel):
+    """Summarise one retriever's weight configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    retriever_name: str
+    spec_type: str
+    weights: int | float | dict[int, float]
+    normalised_weights: int | float | dict[int, float] | None
+
+
+class SaytWeightSpecsSummary(BaseModel):
+    """Summarise the configured collection of weight specifications."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    specs: list[SaytWeightConfigSummary] = Field(default_factory=list)
 
 
 class SaytConfiguration(BaseModel):
@@ -240,6 +257,7 @@ class SaytConfiguration(BaseModel):
     settings: SaytGlobalSettings
     corpus: SaytCorpusSummary
     retrievers: list[SaytRetrieverSummary] = Field(default_factory=list)
+    weight_specs: SaytWeightSpecsSummary
     artifact_provenance: SaytArtifactProvenance | None = None
 
 

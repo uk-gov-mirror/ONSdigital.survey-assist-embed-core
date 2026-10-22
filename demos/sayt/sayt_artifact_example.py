@@ -9,11 +9,15 @@ from tempfile import TemporaryDirectory
 
 from survey_assist_embed_core.sayt import (
     NgramRetrieverSpec,
+    NgramWeightSpec,
     PrefixRetrieverSpec,
+    PrefixWeightSpec,
     RetrieverSpec,
     SAYTBuilder,
     SAYTSuggester,
     SemanticRetrieverSpec,
+    SemanticWeightSpec,
+    WeightSpecs,
 )
 
 # %%
@@ -38,6 +42,14 @@ retrievers: list[RetrieverSpec] = [
     SemanticRetrieverSpec(),
 ]
 
+weights: WeightSpecs = WeightSpecs(
+    specs=[
+        PrefixWeightSpec(),
+        NgramWeightSpec(weights=2),
+        SemanticWeightSpec(weights={4: 2.0, 6: 3.0}),
+    ]
+)
+
 # Keep the temporary directory alive across notebook cells.
 # pylint: disable-next=consider-using-with
 temp_dir = TemporaryDirectory(prefix="sayt_artifact_demo_")
@@ -53,6 +65,7 @@ artifact_path = SAYTBuilder(
     retrievers=retrievers,
     min_chars=3,
     max_suggestions=5,
+    weights=weights,
 ).build_artifact(artifact_dir, overwrite=True)
 
 print("artifact saved to:", artifact_path)
@@ -73,6 +86,7 @@ live_suggester = SAYTSuggester(
     retrievers=retrievers,
     min_chars=3,
     max_suggestions=5,
+    weights=weights,
 )
 loaded_suggester = SAYTSuggester.from_artifact(artifact_path)
 

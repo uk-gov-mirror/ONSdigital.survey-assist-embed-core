@@ -5,7 +5,7 @@
 
 import json
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pandas as pd
@@ -16,7 +16,6 @@ from survey_assist_embed_core.sayt import (
     PrefixRetrieverSpec,
     SAYTBuilder,
     SaytConfiguration,
-    SemanticRetrieverSpec,
 )
 from survey_assist_embed_core.sayt.core import (
     CleanCorpus,
@@ -24,6 +23,23 @@ from survey_assist_embed_core.sayt.core import (
     Suggestion,
 )
 from survey_assist_embed_core.sayt.suggester import SAYTSuggester
+from survey_assist_embed_core.sayt.weight_specs import (
+    NgramWeightSpec,
+    PrefixWeightSpec,
+    WeightSpecs,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _CustomWeightSpec:
+    """Weight spec for the custom retriever configuration tests."""
+
+    weights: float = 1.0
+    retriever_name: str = field(init=False, default="custom")
+
+    def get_weight(self, query_length: int | None = None) -> float:
+        _ = query_length
+        return self.weights
 
 
 def test_constructor_rejects_unknown_kwargs(small_corpus):
@@ -145,6 +161,7 @@ def test_from_csv_builds_and_suggests(tmp_path, small_corpus):
         retrievers=[PrefixRetrieverSpec()],
         min_chars=3,
         max_suggestions=10,
+        weights=WeightSpecs(specs=[PrefixWeightSpec()]),
     )
 
     assert suggester.suggest("car")[0].startswith("Car")
@@ -160,6 +177,7 @@ def test_from_csv_uses_search_column_as_default_display(tmp_path, small_corpus):
         search_text_col="search",
         retrievers=[PrefixRetrieverSpec()],
         min_chars=3,
+        weights=WeightSpecs(specs=[PrefixWeightSpec()]),
     )
 
     assert suggester.suggest("car")[0] == "Car wash"
@@ -202,6 +220,7 @@ def test_from_artifact_restores_prefix_suggester(tmp_path, small_corpus):
         retrievers=[PrefixRetrieverSpec()],
         min_chars=3,
         max_suggestions=5,
+        weights=WeightSpecs(specs=[PrefixWeightSpec(weights=2.0)]),
     ).build_artifact(tmp_path / "artifact")
 
     restored = SAYTSuggester.from_artifact(artifact_dir)
@@ -210,6 +229,7 @@ def test_from_artifact_restores_prefix_suggester(tmp_path, small_corpus):
         retrievers=[PrefixRetrieverSpec()],
         min_chars=3,
         max_suggestions=5,
+        weights=WeightSpecs(specs=[PrefixWeightSpec(weights=2.0)]),
     )
     restored_config = restored.get_config()
     expected_config = expected.get_config()
@@ -237,6 +257,7 @@ def test_from_artifact_rejects_manifest_corpus_size_mismatch(tmp_path, small_cor
         retrievers=[PrefixRetrieverSpec()],
         min_chars=3,
         max_suggestions=5,
+        weights=WeightSpecs(specs=[PrefixWeightSpec(weights=1.0)]),
     ).build_artifact(tmp_path / "artifact")
     manifest_path = artifact_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -256,9 +277,12 @@ def test_get_config_returns_rich_runtime_summary(small_corpus):
         min_chars=3,
         max_suggestions=5,
         retrievers=[
-            PrefixRetrieverSpec(weight=2.0),
-            NgramRetrieverSpec(weight=1.0, n=4, max_df=1.0),
+            PrefixRetrieverSpec(),
+            NgramRetrieverSpec(n=4, max_df=1.0),
         ],
+        weights=WeightSpecs(
+            specs=[PrefixWeightSpec(weights=2.0), NgramWeightSpec(weights=1.0)]
+        ),
     )
 
     config = suggester.get_config()
@@ -277,11 +301,79 @@ def test_get_config_returns_rich_runtime_summary(small_corpus):
     assert [retriever.name for retriever in config.retrievers] == ["prefix", "ngram"]
     assert config.retrievers[0].config == {}
     assert config.retrievers[1].config == {"n": 4, "max_df": 1.0}
-    assert config.retrievers[0].configured_weight == pytest.approx(2.0)
-    assert config.retrievers[0].normalised_weight == pytest.approx(2.0 / 3.0)
-    assert config.retrievers[1].normalised_weight == pytest.approx(1.0 / 3.0)
     assert config.retrievers[1].retriever_type == "NgramRetriever"
+    assert [spec.model_dump() for spec in config.weight_specs.specs] == [
+        {
+            "retriever_name": "prefix",
+            "spec_type": "PrefixWeightSpec",
+            "weights": 2.0,
+            "normalised_weights": pytest.approx(2 / 3),
+        },
+        {
+            "retriever_name": "ngram",
+            "spec_type": "NgramWeightSpec",
+            "weights": 1.0,
+            "normalised_weights": pytest.approx(1 / 3),
+        },
+    ]
     assert config.artifact_provenance is None
+
+
+def test_unknown_weight_specs_are_zeroed_and_excluded_from_normalisation(
+    small_corpus,
+):
+    """Ignore unknown weights when normalising, but retain them in config."""
+    with pytest.warns(
+        RuntimeWarning,
+        match="Weight specs configured for unknown retrievers: ngram",
+    ):
+        suggester = SAYTSuggester(
+            small_corpus,
+            min_chars=3,
+            retrievers=[PrefixRetrieverSpec()],
+            weights=WeightSpecs(
+                specs=[
+                    PrefixWeightSpec(weights=1.0),
+                    NgramWeightSpec(weights=1.0),
+                ]
+            ),
+        )
+
+    assert suggester._weights.get_weight("prefix") == pytest.approx(1.0)
+    assert suggester._weights.get_weight("ngram") == pytest.approx(0.0)
+
+    normalised = {
+        spec.retriever_name: spec.normalised_weights
+        for spec in suggester.get_config().weight_specs.specs
+    }
+    assert normalised == {
+        "prefix": pytest.approx(1.0),
+        "ngram": pytest.approx(0.0),
+    }
+
+
+def test_constructor_rejects_weights_without_active_retrievers(small_corpus):
+    """Reject weights that match none of the configured retrievers."""
+    with (
+        pytest.warns(
+            RuntimeWarning,
+            match="Weight specs configured for unknown retrievers: ngram",
+        ),
+        pytest.warns(
+            RuntimeWarning,
+            match="No weight spec configured for retrievers: prefix",
+        ),
+        pytest.raises(
+            ValueError,
+            match="At least one active retriever weight must be configured",
+        ),
+    ):
+        SAYTSuggester(
+            small_corpus,
+            min_chars=3,
+            retrievers=[PrefixRetrieverSpec()],
+            weights=WeightSpecs(specs=[NgramWeightSpec()]),
+        )
 
 
 def test_get_config_supports_custom_specs_without_artifact_handlers(small_corpus):
@@ -293,9 +385,8 @@ def test_get_config_supports_custom_specs_without_artifact_handlers(small_corpus
             return []
 
     class _CustomSpec:
-        def __init__(self, *, trigger: str, weight: float = 1.0):
+        def __init__(self, *, trigger: str):
             self.trigger = trigger
-            self.weight = weight
             self.name = "custom"
 
         def build(self, corpus, *, min_chars):
@@ -306,6 +397,7 @@ def test_get_config_supports_custom_specs_without_artifact_handlers(small_corpus
         small_corpus,
         min_chars=3,
         retrievers=[_CustomSpec(trigger="groom")],
+        weights=WeightSpecs(specs=[_CustomWeightSpec()]),
     ).get_config()
 
     assert config.retrievers[0].config == {"trigger": "groom"}
@@ -327,7 +419,6 @@ def test_get_config_serialises_nested_custom_spec_values(small_corpus):
     class _CustomSpec:
         def __init__(self):
             self.name = "custom"
-            self.weight = 1.0
             self.folder = Path("artifacts/model")
             self.options = {
                 "labels": ["car", Path("cache/index"), _Marker()],
@@ -343,6 +434,7 @@ def test_get_config_serialises_nested_custom_spec_values(small_corpus):
         small_corpus,
         min_chars=3,
         retrievers=[_CustomSpec()],
+        weights=WeightSpecs(specs=[_CustomWeightSpec()]),
     ).get_config()
 
     assert config.retrievers[0].config == {
@@ -364,11 +456,10 @@ def test_get_config_returns_empty_config_for_slots_only_custom_spec(small_corpus
             return []
 
     class _SlotsOnlySpec:
-        __slots__ = ("name", "trigger", "weight")
+        __slots__ = ("name", "trigger")
 
-        def __init__(self, *, trigger: str, weight: float = 1.0):
-            self.name = "slots-only"
-            self.weight = weight
+        def __init__(self, *, trigger: str):
+            self.name = "custom"
             self.trigger = trigger
 
         def build(self, corpus, *, min_chars):
@@ -379,6 +470,7 @@ def test_get_config_returns_empty_config_for_slots_only_custom_spec(small_corpus
         small_corpus,
         min_chars=3,
         retrievers=[_SlotsOnlySpec(trigger="groom")],
+        weights=WeightSpecs(specs=[_CustomWeightSpec()]),
     ).get_config()
 
     assert config.retrievers[0].config == {}
@@ -387,7 +479,10 @@ def test_get_config_returns_empty_config_for_slots_only_custom_spec(small_corpus
 def test_suggest_returns_empty_for_short_or_non_string_query(small_corpus):
     """Return no suggestions for short or non-string queries."""
     suggester = SAYTSuggester(
-        small_corpus, min_chars=4, retrievers=[PrefixRetrieverSpec()]
+        small_corpus,
+        min_chars=4,
+        retrievers=[PrefixRetrieverSpec()],
+        weights=WeightSpecs(specs=[PrefixWeightSpec()]),
     )
     assert not suggester.suggest("car")
     assert not suggester.suggest(None)
@@ -400,6 +495,7 @@ def test_suggest_with_scores_defaults_to_config_max_suggestions(small_corpus):
         min_chars=3,
         max_suggestions=2,
         retrievers=[PrefixRetrieverSpec()],
+        weights=WeightSpecs(specs=[PrefixWeightSpec()]),
     )
 
     results = suggester.suggest_with_scores("car")
@@ -419,33 +515,22 @@ def test_suggest_respects_explicit_num_suggestions(small_corpus):
         min_chars=3,
         max_suggestions=5,
         retrievers=[PrefixRetrieverSpec()],
+        weights=WeightSpecs(specs=[PrefixWeightSpec()]),
     )
 
     assert len(suggester.suggest("car", num_suggestions=1)) == 4
 
 
-def test_suggest_with_scores_keeps_ties_at_cutoff(small_corpus):
+def test_suggest_with_scores_keeps_ties_at_cutoff(prefix_suggester):
     """Keep all tied scored suggestions at the public cutoff."""
-    suggester = SAYTSuggester(
-        small_corpus,
-        min_chars=3,
-        retrievers=[PrefixRetrieverSpec()],
-    )
-
-    results = suggester.suggest_with_scores("car", num_suggestions=1)
+    results = prefix_suggester.suggest_with_scores("car", num_suggestions=1)
 
     assert len({result.display_text for result in results}) == 4
 
 
-def test_suggest_keeps_ties_at_cutoff(small_corpus):
+def test_suggest_keeps_ties_at_cutoff(prefix_suggester):
     """Keep all tied display suggestions at the public cutoff."""
-    suggester = SAYTSuggester(
-        small_corpus,
-        min_chars=3,
-        retrievers=[PrefixRetrieverSpec()],
-    )
-
-    results = suggester.suggest("car", num_suggestions=1)
+    results = prefix_suggester.suggest("car", num_suggestions=1)
 
     assert results == [
         "Car Waxing",
@@ -469,16 +554,24 @@ def test_suggest_with_scores_uses_only_supplied_retrievers(small_corpus):
 
     @dataclass(frozen=True, slots=True)
     class _StubRetrieverSpec:
-        weight: float = 1.0
         name: str = "stub"
 
         def build(self, corpus, *, min_chars):
             return _StubRetriever(corpus.rows[0])
 
+    @dataclass(frozen=True, slots=True)
+    class _StubWeightSpec:
+        weights: float = 1.0
+        retriever_name: str = "stub"
+
+        def get_weight(self, query_length: int | None = None) -> float:
+            return self.weights
+
     suggester = SAYTSuggester(
         small_corpus,
         min_chars=3,
         retrievers=[_StubRetrieverSpec()],
+        weights=WeightSpecs(specs=[_StubWeightSpec()]),
     )
 
     results = suggester.suggest_with_scores("car")
@@ -487,47 +580,182 @@ def test_suggest_with_scores_uses_only_supplied_retrievers(small_corpus):
     assert [result.display_text for result in results] == [suggester._corpus.rows[0][1]]
 
 
-def test_nomic_query_prefix_only_applies_to_nomic_semantic_spec(
-    monkeypatch, small_corpus
-):
-    """Prefix Nomic queries without requiring a model on other retriever specs."""
+def test_suggest_with_scores_applies_per_call_weight_override(small_corpus):
+    """Apply valid query-specific weight overrides without rebuilding retrievers."""
+
+    class _StubRetriever:
+        def __init__(self, display_text):
+            self.display_text = display_text
+
+        def suggest_with_scores(self, q_norm, num_suggestions):
+            _ = (q_norm, num_suggestions)
+            return [Suggestion(display_text=self.display_text, score=1.0)]
+
+    @dataclass(frozen=True, slots=True)
+    class _StubRetrieverSpec:
+        name: str
+        display_text: str
+
+        def build(self, corpus, *, min_chars):
+            _ = (corpus, min_chars)
+            return _StubRetriever(self.display_text)
+
+    suggester = SAYTSuggester(
+        small_corpus,
+        min_chars=3,
+        retrievers=[
+            _StubRetrieverSpec(name="prefix", display_text="First"),
+            _StubRetrieverSpec(name="ngram", display_text="Second"),
+        ],
+        weights=WeightSpecs(
+            specs=[
+                PrefixWeightSpec(weights=1.0),
+                NgramWeightSpec(weights=1.0),
+            ]
+        ),
+    )
+
+    results = suggester.suggest_with_scores(
+        "car",
+        weights=WeightSpecs(
+            specs=[
+                PrefixWeightSpec(weights=3.0),
+                NgramWeightSpec(weights=1.0),
+            ]
+        ),
+    )
+
+    assert [result.display_text for result in results] == ["First", "Second"]
+    assert [result.score for result in results] == pytest.approx([0.75, 0.25])
+
+
+def test_update_weights_changes_public_scores(small_corpus):
+    """Apply replacement weights to subsequent suggestions."""
+
+    class _StubRetriever:
+        def __init__(self, display_text):
+            self.display_text = display_text
+
+        def suggest_with_scores(self, q_norm, num_suggestions):
+            _ = (q_norm, num_suggestions)
+            return [Suggestion(display_text=self.display_text, score=1.0)]
+
+    @dataclass(frozen=True, slots=True)
+    class _StubRetrieverSpec:
+        name: str
+        display_text: str
+
+        def build(self, corpus, *, min_chars):
+            _ = (corpus, min_chars)
+            return _StubRetriever(self.display_text)
+
+    def _weights(first: float, second: float) -> WeightSpecs:
+        return WeightSpecs(
+            specs=[
+                PrefixWeightSpec(weights=first),
+                NgramWeightSpec(weights=second),
+            ]
+        )
+
+    suggester = SAYTSuggester(
+        small_corpus,
+        min_chars=3,
+        retrievers=[
+            _StubRetrieverSpec(name="prefix", display_text="First"),
+            _StubRetrieverSpec(name="ngram", display_text="Second"),
+        ],
+        weights=_weights(1.0, 1.0),
+    )
+
+    suggester.update_weights(_weights(1.0, 3.0))
+
+    results = suggester.suggest_with_scores("car")
+
+    assert [result.display_text for result in results] == ["Second", "First"]
+    assert [result.score for result in results] == pytest.approx([0.75, 0.25])
+
+
+def test_zero_weight_excludes_retriever_from_public_results(small_corpus):
+    """Do not query or include a retriever whose configured weight is zero."""
     calls = []
 
     class _StubRetriever:
+        def __init__(self, name):
+            self.name = name
+
         def suggest_with_scores(self, q_norm, num_suggestions):
-            calls.append(q_norm)
-            return []
+            _ = (q_norm, num_suggestions)
+            calls.append(self.name)
+            return [Suggestion(display_text=self.name, score=1.0)]
 
     @dataclass(frozen=True, slots=True)
-    class _CustomSemanticSpec:
-        name: str = "semantic"
-        weight: float = 1.0
+    class _StubRetrieverSpec:
+        name: str
 
         def build(self, corpus, *, min_chars):
-            return _StubRetriever()
-
-    monkeypatch.setattr(
-        SemanticRetrieverSpec,
-        "build",
-        lambda self, corpus, *, min_chars: _StubRetriever(),
-    )
+            _ = (corpus, min_chars)
+            return _StubRetriever(self.name)
 
     suggester = SAYTSuggester(
         small_corpus,
         min_chars=3,
-        retrievers=[PrefixRetrieverSpec(), _CustomSemanticSpec()],
+        retrievers=[
+            _StubRetrieverSpec(name="prefix"),
+            _StubRetrieverSpec(name="ngram"),
+        ],
+        weights=WeightSpecs(
+            specs=[
+                PrefixWeightSpec(weights=1.0),
+                NgramWeightSpec(weights=0.0),
+            ]
+        ),
     )
-    suggester.suggest_with_scores("Car Wash")
-    assert calls == ["car wash"]
 
-    calls.clear()
-    suggester = SAYTSuggester(
-        small_corpus,
-        min_chars=3,
-        retrievers=[SemanticRetrieverSpec(model="nomic-ai/nomic-embed-text-v1.5")],
+    assert suggester.suggest("car") == ["prefix"]
+    assert calls == ["prefix"]
+
+
+def test_per_call_empty_weights_are_rejected(prefix_suggester):
+    """Reject an empty per-call weight override."""
+    with pytest.raises(ValueError, match="At least one active retriever weight"):
+        prefix_suggester.suggest("car", weights=WeightSpecs(specs=[]))
+
+
+def test_per_call_unknown_weights_do_not_dilute_active_weights(prefix_suggester):
+    """Normalise per-call weights using only active retrievers."""
+    results = prefix_suggester.suggest_with_scores(
+        "car",
+        weights=WeightSpecs(
+            specs=[
+                PrefixWeightSpec(weights=1.0),
+                NgramWeightSpec(weights=1.0),
+            ]
+        ),
     )
-    suggester.suggest_with_scores("Car Wash")
-    assert calls == ["search_query: car wash"]
+
+    assert results
+    assert max(result.score for result in results) == pytest.approx(1.0)
+
+
+def test_per_call_zero_total_weights_are_rejected(prefix_suggester):
+    """Reject a per-call override whose total weight is zero."""
+    with pytest.raises(ValueError, match="Total weight cannot be zero"):
+        prefix_suggester.suggest(
+            "car",
+            weights=WeightSpecs(specs=[PrefixWeightSpec(weights=0.0)]),
+        )
+
+
+def test_update_weights_rejects_zero_total_without_replacing_current_weights(
+    prefix_suggester,
+):
+    """Keep the active weights when an invalid update is rejected."""
+    with pytest.raises(ValueError, match="Total weight cannot be zero"):
+        prefix_suggester.update_weights(
+            WeightSpecs(specs=[PrefixWeightSpec(weights=0.0)])
+        )
+
+    assert prefix_suggester.suggest("car")
 
 
 def test_suggestion_model_dump_is_api_friendly() -> None:
@@ -540,16 +768,19 @@ def test_suggestion_model_dump_is_api_friendly() -> None:
     }
 
 
-def test_combine_suggestions_ignores_non_positive_score_groups(small_corpus):
+def test_combine_suggestions_ignores_non_positive_score_groups(prefix_suggester):
     """Drop a retriever group entirely when its max score is not positive."""
-    suggester = SAYTSuggester(
-        small_corpus,
-        min_chars=3,
-        retrievers=[PrefixRetrieverSpec()],
-    )
-    combined = suggester._combine_suggestions(
+    combined = prefix_suggester._combine_suggestions(
         [
-            (1.0, [Suggestion(display_text=suggester._corpus.rows[0][1], score=0.0)]),
+            (
+                1.0,
+                [
+                    Suggestion(
+                        display_text=prefix_suggester._corpus.rows[0][1],
+                        score=0.0,
+                    )
+                ],
+            ),
             (1.0, []),
             (1.0, []),
         ]
@@ -558,17 +789,12 @@ def test_combine_suggestions_ignores_non_positive_score_groups(small_corpus):
     assert combined == []
 
 
-def test_combine_suggestions_ignores_invalid_scores(small_corpus):
+def test_combine_suggestions_ignores_invalid_scores(prefix_suggester):
     """Ignore missing row ids and keep distinct row ids in combined scores."""
-    suggester = SAYTSuggester(
-        small_corpus,
-        min_chars=3,
-        retrievers=[PrefixRetrieverSpec()],
-    )
-    first_display = suggester._corpus.rows[0][1]
-    second_display = suggester._corpus.rows[2][1]
+    first_display = prefix_suggester._corpus.rows[0][1]
+    second_display = prefix_suggester._corpus.rows[2][1]
 
-    combined = suggester._combine_suggestions(
+    combined = prefix_suggester._combine_suggestions(
         [
             (1.0, [Suggestion(display_text=first_display, score=0.0)]),
             (
@@ -597,7 +823,6 @@ def test_suggester_defaults_to_standard_retriever_specs(monkeypatch, small_corpu
     @dataclass(frozen=True, slots=True)
     class _StubRetrieverSpec:
         name: str
-        weight: float = 1.0
 
         def build(self, corpus, *, min_chars):
             return _StubRetriever()
@@ -621,65 +846,22 @@ def test_suggester_defaults_to_standard_retriever_specs(monkeypatch, small_corpu
 
 
 def test_constructor_rejects_empty_retriever_list(small_corpus):
-    """Reject suggester construction without any retriever specs."""
-    with pytest.raises(ValueError, match="At least one retriever"):
-        SAYTSuggester(small_corpus, retrievers=[])
-
-
-def test_constructor_rejects_invalid_custom_retriever_weight(small_corpus):
-    """Reject custom retriever specs whose own weight is invalid."""
-    build_calls = []
-
-    class _StubRetriever:
-        def suggest_with_scores(self, q_norm, num_suggestions):
-            return []
-
-    @dataclass(frozen=True, slots=True)
-    class _StubRetrieverSpec:
-        name: str = "stub"
-        weight: float = 1.0
-
-        def build(self, corpus, *, min_chars):
-            build_calls.append((corpus, min_chars))
-            return _StubRetriever()
-
-    @dataclass(frozen=True, slots=True)
-    class _NegativeStubRetrieverSpec:
-        name: str = "negative"
-        weight: float = -0.5
-
-        def build(self, corpus, *, min_chars):
-            build_calls.append((corpus, min_chars))
-            return _StubRetriever()
-
-    @dataclass(frozen=True, slots=True)
-    class _NanStubRetrieverSpec:
-        name: str = "nan"
-        weight: float = float("nan")
-
-        def build(self, corpus, *, min_chars):
-            build_calls.append((corpus, min_chars))
-            return _StubRetriever()
-
-    with pytest.raises(
-        ValueError,
-        match="Retriever 'negative' weight must be a finite value > 0",
+    """Reject construction without any active retriever specs."""
+    with (
+        pytest.warns(
+            RuntimeWarning,
+            match="Weight specs configured for unknown retrievers: prefix",
+        ),
+        pytest.raises(
+            ValueError,
+            match="At least one active retriever weight must be configured",
+        ),
     ):
         SAYTSuggester(
             small_corpus,
-            retrievers=[_StubRetrieverSpec(), _NegativeStubRetrieverSpec()],
+            retrievers=[],
+            weights=WeightSpecs(specs=[PrefixWeightSpec(weights=1.0)]),
         )
-
-    with pytest.raises(
-        ValueError,
-        match="Retriever 'nan' weight must be a finite value > 0",
-    ):
-        SAYTSuggester(
-            small_corpus,
-            retrievers=[_StubRetrieverSpec(), _NanStubRetrieverSpec()],
-        )
-
-    assert not build_calls
 
 
 def test_clean_corpus_rejects_empty_persisted_rows():

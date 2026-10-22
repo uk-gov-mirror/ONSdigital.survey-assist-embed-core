@@ -29,6 +29,11 @@ from survey_assist_embed_core.sayt.retrievers import (
     _PrefixTrieNode,
 )
 from survey_assist_embed_core.sayt.suggester import SAYTSuggester
+from survey_assist_embed_core.sayt.weight_specs import (
+    NgramWeightSpec,
+    PrefixWeightSpec,
+    WeightSpecs,
+)
 
 
 def test_prefix_full_string_match_ranks_expected_terms(small_corpus):
@@ -37,6 +42,7 @@ def test_prefix_full_string_match_ranks_expected_terms(small_corpus):
         small_corpus,
         min_chars=3,
         retrievers=[PrefixRetrieverSpec()],
+        weights=WeightSpecs(specs=[PrefixWeightSpec()]),
     )
     results = suggester.suggest("car")
 
@@ -51,6 +57,7 @@ def test_duplicate_terms_increase_rank_via_counts(small_corpus):
         small_corpus,
         min_chars=3,
         retrievers=[PrefixRetrieverSpec()],
+        weights=WeightSpecs(specs=[PrefixWeightSpec()]),
     )
     results = suggester.suggest("car w")
     assert results[0] == "Car Waxing"
@@ -62,6 +69,7 @@ def test_duplicate_display_variants_are_returned_shorter_first(small_corpus):
         small_corpus,
         min_chars=3,
         retrievers=[PrefixRetrieverSpec()],
+        weights=WeightSpecs(specs=[PrefixWeightSpec()]),
     )
     results = suggester.suggest("car wa")
     index_1 = results.index("Car Wash")
@@ -75,6 +83,7 @@ def test_fuzzy_prefix_can_recover_from_simple_typo(small_corpus):
         small_corpus,
         min_chars=3,
         retrievers=[PrefixRetrieverSpec()],
+        weights=WeightSpecs(specs=[PrefixWeightSpec()]),
     )
     results = suggester.suggest("carpentey")
     assert "Carpentry services" in results
@@ -87,6 +96,7 @@ def test_ngram_recovers_from_typo_when_prefix_does_not_match(small_corpus):
         min_chars=3,
         retrievers=[PrefixRetrieverSpec(), NgramRetrieverSpec(n=3, max_df=1.0)],
         max_suggestions=5,
+        weights=WeightSpecs(specs=[PrefixWeightSpec(), NgramWeightSpec()]),
     )
     results = suggester.suggest("groming")
     assert results[0] == "Dog grooming"
