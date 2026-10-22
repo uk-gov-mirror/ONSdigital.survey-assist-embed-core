@@ -275,7 +275,6 @@ def test_semantic_retriever_artifact_round_trips_and_loads(
             "vectoriser_class": vectoriser_class,
             "output_dir": output_dir,
             "overwrite": overwrite,
-            "query_prefix": "",
         }
 
     def _fake_load_semantic_index(corpus_arg, *, model, vectoriser_class, folder_path):
