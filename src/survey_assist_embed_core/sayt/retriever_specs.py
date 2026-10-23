@@ -271,7 +271,6 @@ class SemanticRetrieverSpec:
             A configured ``SemanticRetriever``.
         """
         corpus = self._prefixed_corpus(corpus)
-        print(corpus)
         if filespace_path is None:
             return SemanticRetriever(
                 corpus,
